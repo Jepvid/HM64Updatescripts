@@ -17,25 +17,23 @@ jobs:
         python-version: [3.11]
 
     steps:
-      # 1. Checkout repository
       - uses: actions/checkout@v4
 
-      # 2. Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      # 3. Install dependencies
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # 4. Determine version from git tag or branch
+      # === FIX: Force bash so Windows can run [[ ]] ===
       - name: Determine version
         id: version
+        shell: bash
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             VERSION="${GITHUB_REF#refs/tags/}"
@@ -44,8 +42,8 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-      # 5. Build all executables
       - name: Build executables
+        shell: bash
         run: |
           cd scripts
           rm -rf dist build __pycache__
@@ -58,11 +56,12 @@ jobs:
             fi
           done
 
-      # 6. Package into OS-specific zip
-      - name: Create ZIP package
+      - name: Package executables
+        shell: bash
         run: |
           cd scripts/dist
           OS="${{ matrix.os }}"
+
           if [[ "$OS" == "windows-latest" ]]; then
             ZIP="../../MyGameUpdater-${VERSION}-Windows.zip"
           elif [[ "$OS" == "ubuntu-latest" ]]; then
@@ -70,15 +69,13 @@ jobs:
           else
             ZIP="../../MyGameUpdater-${VERSION}-Mac.zip"
           fi
+
           zip -r "$ZIP" ./*
 
-      # 7. Upload artifact (NEW v4 API)
+      # === FIX: Upload ONLY the zip belonging to this OS ===
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: MyGameUpdater-${{ matrix.os }}
-          path: |
-            MyGameUpdater-${VERSION}-Windows.zip
-            MyGameUpdater-${VERSION}-Linux.zip
-            MyGameUpdater-${VERSION}-Mac.zip
+          path: MyGameUpdater-${{ env.VERSION }}-*.zip
           if-no-files-found: error
