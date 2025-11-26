@@ -90,6 +90,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MyGameUpdater-${{ matrix.os }}
-          path: MyGameUpdater-${{ env.VERSION }}-*.zip
+          name: HM64Updater-${{ matrix.os }}
+          path: HM64Updater-${{ env.VERSION }}-*.zip
           if-no-files-found: error
