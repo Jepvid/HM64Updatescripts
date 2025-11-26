@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*.*.*'
   workflow_dispatch:
 
 jobs:
@@ -15,12 +17,12 @@ jobs:
         python-version: [3.11]
 
     steps:
-      # 1. Checkout repo
-      - uses: actions/checkout@v3
+      # 1. Checkout repository
+      - uses: actions/checkout@v4
 
       # 2. Setup Python
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -31,11 +33,22 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # 4. Build executables
+      # 4. Determine version from git tag or branch
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="${GITHUB_REF#refs/heads/}"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      # 5. Build all executables
       - name: Build executables
         run: |
           cd scripts
-          rm -rf dist build __pycache__  # Clean previous builds
+          rm -rf dist build __pycache__
           for f in *.py; do
             echo "Building $f"
             if [[ "$RUNNER_OS" == "Windows" ]]; then
@@ -45,25 +58,27 @@ jobs:
             fi
           done
 
-      # 5. Zip executables per OS
-      - name: Package executables
+      # 6. Package into OS-specific zip
+      - name: Create ZIP package
         run: |
           cd scripts/dist
-          OS_NAME="${{ matrix.os }}"
-          if [[ "$OS_NAME" == "windows-latest" ]]; then
-            zip -r ../../windows_build.zip ./*
-          elif [[ "$OS_NAME" == "ubuntu-latest" ]]; then
-            zip -r ../../linux_build.zip ./*
-          elif [[ "$OS_NAME" == "macos-latest" ]]; then
-            zip -r ../../macos_build.zip ./*
+          OS="${{ matrix.os }}"
+          if [[ "$OS" == "windows-latest" ]]; then
+            ZIP="../../MyGameUpdater-${VERSION}-Windows.zip"
+          elif [[ "$OS" == "ubuntu-latest" ]]; then
+            ZIP="../../MyGameUpdater-${VERSION}-Linux.zip"
+          else
+            ZIP="../../MyGameUpdater-${VERSION}-Mac.zip"
           fi
+          zip -r "$ZIP" ./*
 
-      # 6. Upload zip files as artifacts
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+      # 7. Upload artifact (NEW v4 API)
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: game-updater-${{ matrix.os }}
+          name: MyGameUpdater-${{ matrix.os }}
           path: |
-            windows_build.zip
-            linux_build.zip
-            macos_build.zip
+            MyGameUpdater-${VERSION}-Windows.zip
+            MyGameUpdater-${VERSION}-Linux.zip
+            MyGameUpdater-${VERSION}-Mac.zip
+          if-no-files-found: error
