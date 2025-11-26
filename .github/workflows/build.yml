@@ -1,4 +1,4 @@
-name: Build Game Updater Executables
+name: Build & Release HM64Updater
 
 on:
   push:
@@ -7,6 +7,9 @@ on:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
+
+env:
+  SCRIPTS_DIR: scripts
 
 jobs:
   build:
@@ -17,22 +20,22 @@ jobs:
         python-version: [3.11]
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pyinstaller
+        shell: bash
 
-      # ---------------------------------------------
-      # FIX: Make version-detection work on all OSes
-      # ---------------------------------------------
+      # Determine version (tag or branch)
       - name: Determine version
         id: version
         shell: bash
@@ -44,52 +47,209 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-      # ---------------------------------------------
-      # Build executables
-      # ---------------------------------------------
-      - name: Build executables
+      # Build all scripts with PyInstaller
+      - name: Build executables with PyInstaller
         shell: bash
         run: |
           set -e
-          cd scripts
+          cd $SCRIPTS_DIR
           rm -rf dist build __pycache__
           for f in *.py; do
             echo "Building $f"
             if [[ "$RUNNER_OS" == "Windows" ]]; then
+              # On Windows runner this will still run in bash (Git for Windows). PyInstaller will produce .exe in dist/
               pyinstaller --onefile --noconsole "$f"
             else
               pyinstaller --onefile "$f"
             fi
           done
 
-      # ---------------------------------------------
-      # Package executables (cross-platform)
-      # ---------------------------------------------
-      - name: Package executables (Windows)
+      # --------- Linux: build AppImages from each binary ----------
+      - name: Create AppImages (Linux only)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          cd $SCRIPTS_DIR/dist
+
+          # Download appimagetool
+          APPIMAGETOOL=appimagetool-x86_64.AppImage
+          APPIMAGETOOL_URL="https://github.com/AppImage/AppImageKit/releases/download/continuous/$APPIMAGETOOL"
+          if [ ! -f "$APPIMAGETOOL" ]; then
+            wget -q --show-progress "$APPIMAGETOOL_URL"
+            chmod +x "$APPIMAGETOOL"
+          fi
+
+          # For each built binary in dist/, create an AppDir and call appimagetool
+          for binfile in *; do
+            # Skip if not an ELF executable (basic heuristic)
+            if file "$binfile" | grep -qi 'ELF'; then
+              NAME="${binfile%.*}"
+              APPDIR="${NAME}.AppDir"
+              rm -rf "$APPDIR"
+              mkdir -p "$APPDIR/usr/bin"
+              # Copy the binary into AppDir/usr/bin/<NAME>
+              cp "$binfile" "$APPDIR/usr/bin/$NAME"
+              chmod +x "$APPDIR/usr/bin/$NAME"
+
+              # Minimal .desktop file
+              cat > "$APPDIR/$NAME.desktop" <<EOF
+[Desktop Entry]
+Name=$NAME
+Exec=$NAME
+Type=Application
+Terminal=false
+Categories=Utility;
+EOF
+
+              # Optional icon placeholder (not required) - skip if none
+
+              # Build AppImage (outputs NAME-x86_64.AppImage)
+              ./appimagetool-x86_64.AppImage "$APPDIR" || (echo "appimagetool failed for $NAME" && exit 1)
+
+              # Move produced AppImage to a stable name: NAME.AppImage
+              # appimagetool typically outputs <NAME>-*.AppImage, try to find it:
+              OUT=$(ls $NAME*.AppImage | head -n1)
+              if [ -z "$OUT" ]; then
+                echo "No AppImage built for $NAME"
+                exit 1
+              fi
+              mv "$OUT" "${NAME}.AppImage"
+              chmod +x "${NAME}.AppImage"
+            else
+              echo "Skipping non-ELF file: $binfile"
+            fi
+          done
+
+      # --------- Package per-OS into HM64Updater-<os>.zip ----------
+      # Windows packaging: use Compress-Archive (PowerShell)
+      - name: Package Windows ZIP
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          $zipPath = "HM64Updater-${env:VERSION}-Windows.zip"
-          Compress-Archive -Path "scripts/dist/*" -DestinationPath $zipPath -Force
+          # navigate to scripts/dist and zip all .exe files
+          $dist = Join-Path ${{ github.workspace }} '$env:SCRIPTS_DIR\dist'
+          Push-Location $dist
+          $zipPath = Join-Path ${{ github.workspace }} 'HM64Updater-windows.zip'
+          # Remove previous zip if exists
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          # Collect files to compress
+          $files = Get-ChildItem -File -Recurse | Where-Object { $_.Extension -ieq '.exe' }
+          if ($files.Count -eq 0) { Write-Host "No .exe files found in dist."; exit 1 }
+          Compress-Archive -Path $files.FullName -DestinationPath $zipPath -Force
+          Pop-Location
 
-      - name: Package executables (Linux/macOS)
-        if: runner.os != 'Windows'
+      # macOS packaging: use zip
+      - name: Package macOS ZIP
+        if: runner.os == 'macOS'
         shell: bash
         run: |
-          cd scripts/dist
-          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-            ZIP="../../HM64Updater-${VERSION}-Linux.zip"
-          else
-            ZIP="../../HM64Updater-${VERSION}-Mac.zip"
-          fi
+          set -e
+          cd $SCRIPTS_DIR/dist
+          ZIP="../../HM64Updater-macos.zip"
+          rm -f "$ZIP"
+          # include all files (PyInstaller single-file binaries)
           zip -r "$ZIP" ./*
 
-      # ---------------------------------------------
-      # Upload artifact (v4)
-      # ---------------------------------------------
-      - name: Upload artifact
+      # Linux packaging: include AppImages
+      - name: Package Linux ZIP
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          cd $SCRIPTS_DIR/dist
+          ZIP="../../HM64Updater-linux.zip"
+          rm -f "$ZIP"
+          # include only .AppImage files (created by previous step)
+          shopt -s nullglob
+          apps=( *.AppImage )
+          if [ ${#apps[@]} -eq 0 ]; then
+            echo "No AppImage files found in dist."
+            exit 1
+          fi
+          zip -r "$ZIP" "${apps[@]}"
+
+      # Upload the OS-specific zip artifact (single file)
+      - name: Upload OS ZIP artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HM64Updater-${{ matrix.os }}
-          path: HM64Updater-${{ env.VERSION }}-*.zip
+          name: ${{ runner.os == 'Windows' && 'HM64Updater-windows' || runner.os == 'Linux' && 'HM64Updater-linux' || 'HM64Updater-macos' }}
+          path: |
+            HM64Updater-windows.zip
+            HM64Updater-linux.zip
+            HM64Updater-macos.zip
           if-no-files-found: error
+
+  # Release job: runs only on tags and after build completes
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download Windows ZIP artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: HM64Updater-windows
+          path: ./release || true
+
+      - name: Download macOS ZIP artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: HM64Updater-macos
+          path: ./release || true
+
+      - name: Download Linux ZIP artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: HM64Updater-linux
+          path: ./release || true
+
+      - name: List release folder
+        run: |
+          ls -la release || true
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: "HM64Updater ${{ github.ref_name }}"
+          body: "Automated release for ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+
+      - name: Upload Windows zip to Release (if exists)
+        if: files.exist('release/HM64Updater-windows.zip')
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: release/HM64Updater-windows.zip
+          asset_name: HM64Updater-windows.zip
+          asset_content_type: application/zip
+
+      - name: Upload macOS zip to Release (if exists)
+        if: files.exist('release/HM64Updater-macos.zip')
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: release/HM64Updater-macos.zip
+          asset_name: HM64Updater-macos.zip
+          asset_content_type: application/zip
+
+      - name: Upload Linux zip to Release (if exists)
+        if: files.exist('release/HM64Updater-linux.zip')
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: release/HM64Updater-linux.zip
+          asset_name: HM64Updater-linux.zip
+          asset_content_type: application/zip
