@@ -30,7 +30,9 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # === FIX: Force bash so Windows can run [[ ]] ===
+      # ---------------------------------------------
+      # FIX: Make version-detection work on all OSes
+      # ---------------------------------------------
       - name: Determine version
         id: version
         shell: bash
@@ -42,9 +44,13 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
+      # ---------------------------------------------
+      # Build executables
+      # ---------------------------------------------
       - name: Build executables
         shell: bash
         run: |
+          set -e
           cd scripts
           rm -rf dist build __pycache__
           for f in *.py; do
@@ -56,23 +62,31 @@ jobs:
             fi
           done
 
-      - name: Package executables
+      # ---------------------------------------------
+      # Package executables (cross-platform)
+      # ---------------------------------------------
+      - name: Package executables (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $zipPath = "MyGameUpdater-${env:VERSION}-Windows.zip"
+          Compress-Archive -Path "scripts/dist/*" -DestinationPath $zipPath -Force
+
+      - name: Package executables (Linux/macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           cd scripts/dist
-          OS="${{ matrix.os }}"
-
-          if [[ "$OS" == "windows-latest" ]]; then
-            ZIP="../../MyGameUpdater-${VERSION}-Windows.zip"
-          elif [[ "$OS" == "ubuntu-latest" ]]; then
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
             ZIP="../../MyGameUpdater-${VERSION}-Linux.zip"
           else
             ZIP="../../MyGameUpdater-${VERSION}-Mac.zip"
           fi
-
           zip -r "$ZIP" ./*
 
-      # === FIX: Upload ONLY the zip belonging to this OS ===
+      # ---------------------------------------------
+      # Upload artifact (v4)
+      # ---------------------------------------------
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
