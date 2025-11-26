@@ -86,16 +86,6 @@ jobs:
               cp "$binfile" "$APPDIR/usr/bin/$NAME"
               chmod +x "$APPDIR/usr/bin/$NAME"
 
-              # Minimal .desktop file
-              cat > "$APPDIR/$NAME.desktop" <<'EOL'
-[Desktop Entry]
-Name=${NAME}
-Exec=${NAME}
-Type=Application
-Terminal=false
-Categories=Utility;
-EOL
-
               # Build AppImage
               ./appimagetool-x86_64.AppImage "$APPDIR"
               # Move output AppImage to consistent name
