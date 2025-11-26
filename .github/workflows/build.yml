@@ -69,7 +69,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          $zipPath = "MyGameUpdater-${env:VERSION}-Windows.zip"
+          $zipPath = "HM64Updater-${env:VERSION}-Windows.zip"
           Compress-Archive -Path "scripts/dist/*" -DestinationPath $zipPath -Force
 
       - name: Package executables (Linux/macOS)
@@ -78,9 +78,9 @@ jobs:
         run: |
           cd scripts/dist
           if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
-            ZIP="../../MyGameUpdater-${VERSION}-Linux.zip"
+            ZIP="../../HM64Updater-${VERSION}-Linux.zip"
           else
-            ZIP="../../MyGameUpdater-${VERSION}-Mac.zip"
+            ZIP="../../HM64Updater-${VERSION}-Mac.zip"
           fi
           zip -r "$ZIP" ./*
 
